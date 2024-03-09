@@ -1,0 +1,5 @@
+syntax "javascript" "\.js$"
+color brightyellow "true|false|null|undefined"
+color brightgreen "//.*"
+color cyan "(function|var|let|const|if|else|for|while|do|switch|case|break|return|typeof|new|try|catch|finally|throw)"
+color magenta "\"(\\.|[^\"])*\"|'(\\.|[^'])*'"

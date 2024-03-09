@@ -1,0 +1,2 @@
+include ~/buildless/html.nanorc
+include ~/buildless/javascript.nanorc
