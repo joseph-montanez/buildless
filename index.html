@@ -8,6 +8,29 @@
     <!-- Chrome Inspector -->
     <script src="//cdn.jsdelivr.net/npm/eruda"></script>
     <script>eruda.init();</script>
+    <!-- Watch Files -->
+    <script>
+        function checkForChanges() {
+            fetch('/watch')
+                .then(response => response.text())
+                .then(data => {
+                    if (data.trim() === '1') {
+                        window.location.reload();
+                    } else {
+                        // Schedule the next check in 1 second
+                        setTimeout(checkForChanges, 1000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error checking for changes:', error);
+                    // Schedule the next check even if there was an error
+                    setTimeout(checkForChanges, 1000);
+                });
+        }
+
+        // Start the checking process when the page loads
+        document.addEventListener('DOMContentLoaded', checkForChanges);
+    </script>
     <!-- React Setup -->
     <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
@@ -43,7 +66,7 @@
 
     function Footer() {
         return (
-            <pre>Just view source this page and you will see all of the code there, easy to follow and learn</pre>
+            <div>Just view source this page and you will see all of the code there, easy to follow and learn</div>
         )
     }
 
@@ -55,7 +78,8 @@
                 <Header />
                 <h1>Welcome to the Home Page!</h1>
                 <p>This is the home page content.</p>
-                {/* <Link to="about">About Us</Link> */}
+                <Link to="about">About Us</Link><br />
+                <img src="images/pexels-david-gari-20421927.jpg" alt="" height={300} />
                 <Footer />
             </div>
         );

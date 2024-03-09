@@ -1,1 +1,1 @@
-nohup ./server &
+nohup ./monitor.sh > output.log 2>&1 &
