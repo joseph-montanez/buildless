@@ -1,4 +1,0 @@
-syntax "html" "\.html?$"
-color brightblue "<.*?>"
-color yellow "(href|src)=\"[^\"]*\""
-color brightgreen "&[a-z]+;"
