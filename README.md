@@ -6,12 +6,21 @@ This is a way to do web development on an Android or iOS/iPad device.
 
 iSH is an Alpine 32-bit emulator for iOS/iPadOS. You can do all your development in here with Nano, Vim
 
-Install Python 3 & Git
+### Updating
 
-    apk add python3 git
+This command may need to be ran several times, as something may fail. I normally have to run it around 3-4 times.
+
+    apk update && apk upgrade
+
+Install C, Git
+
+    apk add git gcc musl-dev
+
     git clone https://github.com/joseph-montanez/buildless.git
+
     cd buildness
-    ./start/sh
+    
+
 
 ### Why not NodeJS?
 

@@ -1,1 +1,1 @@
-nohup python3 server.py &
+nohup ./server &
