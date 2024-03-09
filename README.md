@@ -12,9 +12,9 @@ This command may need to be ran several times, as something may fail. I normally
 
     apk update && apk upgrade
 
-Install C, Git
+Install C, Git, Vim
 
-    apk add git gcc musl-dev
+    apk add git gcc musl-dev vim
 
     git clone https://github.com/joseph-montanez/buildless.git
 
