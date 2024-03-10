@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <sys/select.h>
 #include <stdbool.h>
+#include <unistd.h>
 
 #define MAX_CLIENTS 256
 #define PORT 8080
@@ -251,6 +252,7 @@ int main() {
     printf("Serving at port %d\n", PORT);
 
     while (1) {
+        usleep(10000);
         time_t current_mod_time = get_latest_mod_time();
         if (current_mod_time > last_check_time) {
             for (int i = 0; i < num_clients; i++) {
