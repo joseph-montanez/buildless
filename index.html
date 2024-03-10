@@ -8,28 +8,38 @@
     <!-- Chrome Inspector -->
     <script src="//cdn.jsdelivr.net/npm/eruda"></script>
     <script>eruda.init();</script>
-    <!-- Watch Files -->
+    <!-- Watch Files: Server Side Events -->
     <script>
-        function checkForChanges() {
-            fetch('/watch')
-                .then(response => response.text())
-                .then(data => {
-                    if (data.trim() === '1') {
-                        window.location.reload();
-                    } else {
-                        // Schedule the next check in 1 second
-                        setTimeout(checkForChanges, 1000);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error checking for changes:', error);
-                    // Schedule the next check even if there was an error
-                    setTimeout(checkForChanges, 1000);
-                });
+        function startListeningForChanges() {
+            const source = new EventSource('/watch');
+
+            source.onmessage = function (event) {
+                console.log(event);
+                // The server sends a message when a change is detected
+                if (event.data.trim() === 'update') {
+                    window.location.reload(); // Reload the page if there's an update
+                }
+                // No need to manually schedule the next check as SSE keeps the connection open
+            };
+
+            source.onerror = function (error) {
+                console.error('EventSource failed:', error);
+                source.close(); // Close the connection if there's an error
+
+                // Optionally, attempt to reconnect after a delay
+                setTimeout(startListeningForChanges, 1000);
+            };
+
+            // Optional: Listen for custom events if your server sends them
+            source.addEventListener('customEventName', function (e) {
+                const data = JSON.parse(e.data);
+                console.log('Received a custom event:', data);
+                // Handle custom event data
+            }, false);
         }
 
-        // Start the checking process when the page loads
-        document.addEventListener('DOMContentLoaded', checkForChanges);
+        // Start listening for changes when the page loads
+        document.addEventListener('DOMContentLoaded', startListeningForChanges);
     </script>
     <!-- React Setup -->
     <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
@@ -106,7 +116,6 @@
     );
 
     // Render the router
-
     ReactDOM.render(<RouterProvider router={router} />, document.getElementById('root'));
 </script>
 </body>

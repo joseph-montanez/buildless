@@ -9,12 +9,43 @@
 #include <time.h>
 #include <fnmatch.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/select.h>
+#include <stdbool.h>
 
-
+#define MAX_CLIENTS 256
 #define PORT 8080
-#define BUFFER_SIZE 4096
+#define BUFFER_SIZE 16384
 
 time_t last_check_time = 0;
+int client_sockets[MAX_CLIENTS];
+bool client_needs_update[MAX_CLIENTS];
+bool client_subscribed_to_watch[MAX_CLIENTS];
+int num_clients = 0;
+
+void set_socket_non_blocking(int socket) {
+    int flags = fcntl(socket, F_GETFL, 0);
+    if (flags == -1) {
+        perror("fcntl F_GETFL");
+        return;
+    }
+    if (fcntl(socket, F_SETFL, flags | O_NONBLOCK) == -1) {
+        perror("fcntl F_SETFL O_NONBLOCK");
+    }
+}
+
+void set_socket_blocking(int socket) {
+    int flags = fcntl(socket, F_GETFL, 0);
+    if (flags == -1) {
+        perror("fcntl F_GETFL");
+        return;
+    }
+    flags &= ~O_NONBLOCK;
+    if (fcntl(socket, F_SETFL, flags) == -1) {
+        perror("fcntl F_SETFL ~O_NONBLOCK");
+    }
+}
 
 void check_file_mod_time(const char *path, time_t *latest_mod_time) {
     struct stat statbuf;
@@ -64,25 +95,52 @@ time_t get_latest_mod_time() {
     return latest_mod_time;
 }
 
+int is_socket_alive(int socket_fd) {
+    fd_set read_fds;
+    struct timeval tv;
+    int retval;
+    char buffer[1];
+
+    // Set up the file descriptor set.
+    FD_ZERO(&read_fds);
+    FD_SET(socket_fd, &read_fds);
+
+    // Set up the struct timeval for the timeout.
+    tv.tv_sec = 0;
+    tv.tv_usec = 500000; // 500 milliseconds timeout
+
+    // Wait for readability or error.
+    retval = select(socket_fd + 1, &read_fds, NULL, NULL, &tv);
+
+    if (retval == -1) {
+        // An error occurred with select()
+        perror("select()");
+        return 0;
+    } else if (retval) {
+        // Data is available, this means the socket is still alive.
+        // Use MSG_PEEK to check the socket without removing data from the buffer
+        retval = recv(socket_fd, buffer, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (retval > 0) {
+            // Data is available to read, socket is alive.
+            return 1;
+        } else if (retval == 0 || (retval == -1 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+            // The client has closed the connection or an error occurred
+            return 0;
+        }
+    }
+    // select() timed out, no data available, but the socket is not necessarily dead.
+    // You might decide based on your application's logic whether to treat this as alive or not.
+    // For the sake of this example, let's assume the socket is still alive.
+    return 1;
+}
+
 void serve_watch(int socket) {
-    const time_t current_mod_time = get_latest_mod_time();
-    char response[100]; // Increased size to accommodate additional headers
+    char header[] = "HTTP/1.1 200 OK\n"
+                    "Content-Type: text/event-stream\n"
+                    "Cache-Control: no-cache\n"
+                    "Connection: keep-alive\n\n";
+    send(socket, header, strlen(header), MSG_NOSIGNAL | MSG_DONTWAIT); // Ensure non-blocking send
 
-    if (current_mod_time > last_check_time) {
-        // Body is "1", so Content-Length is 1
-        sprintf(response, "HTTP/1.1 200 OK\nContent-Type: text/plain\nContent-Length: 1\n\n1");
-        last_check_time = current_mod_time; // Update the last check time
-    } else {
-        // Body is "0", so Content-Length is also 1
-        sprintf(response, "HTTP/1.1 200 OK\nContent-Type: text/plain\nContent-Length: 1\n\n0");
-    }
-
-    const ssize_t bytes_sent = send(socket, response, strlen(response), 0);
-    if (bytes_sent == -1) {
-        perror("send failed");
-        // Handle the error, maybe close the socket
-        close(socket);
-    }
 }
 
 const char* get_mime_type(const char* path) {
@@ -92,7 +150,8 @@ const char* get_mime_type(const char* path) {
     }
     if (strcmp(ext, ".html") == 0) return "text/html";
     if (strcmp(ext, ".css") == 0) return "text/css";
-    if (strcmp(ext, ".js") == 0) return "application/javascript";
+    if (strcmp(ext, ".js") == 0 || strcmp(ext, ".jsx") == 0) return "application/javascript";
+    if (strcmp(ext, ".svg") == 0) return "image/svg+xml";
     if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0) return "image/jpeg";
     if (strcmp(ext, ".png") == 0) return "image/png";
     // Add more MIME types here as needed.
@@ -139,12 +198,24 @@ void serve_file(int socket, const char* path) {
 }
 
 int main() {
-
     int server_fd, new_socket;
     struct sockaddr_in address;
     int opt = 1;  // This is used to set SO_REUSEADDR
     int addr_len = sizeof(address);
     char buffer[BUFFER_SIZE];
+    struct timeval tv;
+    fd_set read_fds, write_fds;
+
+    // Initialize client_sockets array to -1
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        client_sockets[i] = -1;
+    }
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        client_needs_update[i] = false;
+    }
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        client_subscribed_to_watch[i] = false;
+    }
 
     // Ignore SIGPIPE signals
     signal(SIGPIPE, SIG_IGN);
@@ -175,47 +246,147 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
+    set_socket_non_blocking(server_fd);
+
     printf("Serving at port %d\n", PORT);
 
     while (1) {
-        new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addr_len);
-        if (new_socket < 0) {
-            perror("accept");
-            exit(EXIT_FAILURE);
-        }
-
-        memset(buffer, 0, BUFFER_SIZE);
-        read(new_socket, buffer, BUFFER_SIZE - 1);
-
-        // Simple parsing to extract the requested URL path
-        char *method = strtok(buffer, " ");
-        char *path = strtok(NULL, " ");
-
-        // while (path && (*path == '.' || *path == '/')) {
-        //     path++;  // Adjust the pointer to skip these characters.
-        // }
-        printf("Requested path: %s\n", path); // Print the path
-
-        if (path && strcmp(method, "GET") == 0) {
-            // Special endpoint handling
-            if (strcmp(path, "/watch") == 0) {
-                serve_watch(new_socket);
-            } else {
-                char filepath[256] = ".";
-                strcat(filepath, path); // Create filepath from the current directory
-                // Check if the file exists; if not, or if the request is for "/", serve index.html
-                struct stat filestat;
-                if (strcmp(path, "/") == 0 || stat(filepath, &filestat) < 0) {
-                    strcpy(filepath, "./index.html");
+        time_t current_mod_time = get_latest_mod_time();
+        if (current_mod_time > last_check_time) {
+            for (int i = 0; i < num_clients; i++) {
+                if (client_sockets[i] != -1 && client_subscribed_to_watch[i]) {
+                    client_needs_update[i] = true;
+                    printf("Files changed, flagging client %d for update.\n", i);
                 }
-                serve_file(new_socket, filepath);
             }
-        } else {
-            // For simplicity, serve index.html if the request is not a GET or the path is not parsed
-            serve_file(new_socket, "index.html");
+            last_check_time = current_mod_time;
         }
 
-        close(new_socket);
+
+        FD_ZERO(&read_fds);
+        FD_ZERO(&write_fds);
+        FD_SET(server_fd, &read_fds);
+
+        int max_fd = server_fd;
+
+        // Add client sockets to read_fds and write_fds
+        for (int i = 0; i < num_clients; i++) {
+            if (client_sockets[i] != -1) {
+                FD_SET(client_sockets[i], &read_fds);
+                FD_SET(client_sockets[i], &write_fds); // Only for clients that need updates
+                if (client_sockets[i] > max_fd) {
+                    max_fd = client_sockets[i];
+                }
+            }
+        }
+
+        // Set timeout for select()
+        tv.tv_sec = 1; // Wake up every second to check for file changes
+        tv.tv_usec = 0;
+
+        int activity = select(max_fd + 1, &read_fds, &write_fds, NULL, &tv);
+
+        if ((activity < 0) && (errno != EINTR)) {
+            printf("select error");
+        }
+
+        // Accept new connections
+        if (FD_ISSET(server_fd, &read_fds)) {
+            while ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addr_len)) > 0) {
+                set_socket_non_blocking(new_socket);      // Add new_socket to client_sockets array
+                int added = 0; // Flag to check if socket was added
+                for (int i = 0; i < MAX_CLIENTS; i++) {
+                    if (client_sockets[i] == -1) { // Slot is available
+                        client_sockets[i] = new_socket;
+                        printf("Added new client on socket %d\n", new_socket);
+                        added = 1;
+                        break; // Exit the loop after adding socket
+                    }
+                }
+
+                if (!added) {
+                    printf("Reached max clients. Rejecting new connection.\n");
+                    close(new_socket); // Close the socket if we can't add it to our list
+                } else {
+                    num_clients++;
+                    break;
+                }
+            }
+            if (new_socket < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                perror("accept");
+            }
+        }
+
+        // Handle client requests and /watch updates
+        for (int i = 0; i < num_clients; i++) {
+            if (client_sockets[i] == -1) continue;  // Skip invalid entries
+
+            if (FD_ISSET(client_sockets[i], &read_fds)) {
+                memset(buffer, 0, BUFFER_SIZE);
+                ssize_t read_bytes = recv(client_sockets[i], buffer, BUFFER_SIZE - 1, 0);  // Changed from read() to recv()
+
+                if (read_bytes > 0) {
+                    // Parse request here (simplified)
+                    char *method = strtok(buffer, " ");
+                    char *path = strtok(NULL, " ");
+
+                    if (method && path && strcmp(method, "GET") == 0) {
+                        if (strcmp(path, "/watch") == 0) {
+                            printf("Watch established.\n");
+                            serve_watch(client_sockets[i]);  // Set up client for SSE
+                            client_subscribed_to_watch[i] = true;  // Mark client as subscribed
+
+                            // Don't automatically flag for update unless there's new content
+                            if (get_latest_mod_time() > last_check_time) {
+                                client_needs_update[i] = true;
+                            }
+                        } else {
+                            char filepath[256] = ".";
+                            strcat(filepath, path);  // Create filepath from the current directory
+                            // Check if the file exists; if not, or if the request is for "/", serve index.html
+                            struct stat filestat;
+                            if (strcmp(path, "/") == 0 || stat(filepath, &filestat) < 0) {
+                                strcpy(filepath, "./index.html");
+                            }
+
+                            // Note: Change `new_socket` to `client_sockets[i]` to reflect the correct socket in use.
+                            serve_file(client_sockets[i], filepath);
+                        }
+                    } else {
+                        // Note: Change `new_socket` to `client_sockets[i]` for consistency and correctness.
+                        serve_file(client_sockets[i], "index.html");
+                    }
+                } else if (read_bytes == 0 || (read_bytes < 0 && (errno != EAGAIN && errno != EWOULDBLOCK))) {
+                    // Client disconnected or read error occurred
+                    close(client_sockets[i]);
+                    client_sockets[i] = -1;  // Mark as available for a new connection
+                    continue;
+                }
+            }
+        }
+
+
+        // After handling reads, handle writes (e.g., sending updates to /watch subscribers) separately
+        // to ensure you're only writing when the socket is indeed ready for writing
+        for (int i = 0; i < num_clients; i++) {
+            if (client_sockets[i] == -1 || !client_needs_update[i]) continue; // Skip if not subscribed to /watch or no updates
+
+            if (FD_ISSET(client_sockets[i], &write_fds)) {
+                const char *update_message = "data: update\n\n";
+                ssize_t sent_bytes = send(client_sockets[i], update_message, strlen(update_message), MSG_NOSIGNAL | MSG_DONTWAIT);
+
+                if (sent_bytes < 0) {
+                    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                        close(client_sockets[i]);
+                        client_sockets[i] = -1; // Mark as available
+                        client_needs_update[i] = false; // Reset flag
+                    }
+                } else {
+                    client_needs_update[i] = false; // Consider resetting only after successful send
+                }
+            }
+        }
+
     }
 
     return 0;
