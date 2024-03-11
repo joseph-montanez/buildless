@@ -1,13 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
-    <title>React without build steps</title>
+    <title>Lit without build steps</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- Chrome Inspector -->
-    <script src="//cdn.jsdelivr.net/npm/eruda"></script>
-    <script>eruda.init();</script>
     <!-- Watch Files: Server Side Events -->
     <script>
         function startListeningForChanges() {
@@ -41,83 +37,86 @@
         // Start listening for changes when the page loads
         document.addEventListener('DOMContentLoaded', startListeningForChanges);
     </script>
-    <!-- React Setup -->
-    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@remix-run/router@1.15.3/dist/router.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/react-router@6.22.3/dist/umd/react-router.production.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/react-router-dom@6.22.3/dist/umd/react-router-dom.production.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.0/babel.min.js"></script>
+    <script type="importmap">
+        {
+          "imports": {
+            "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
+            "@vaadin/router": "https://cdn.jsdelivr.net/npm/@vaadin/router"
+          }
+        }
+    </script>
+    <script type="module">
+        import { LitElement, html, css } from 'lit';
+        import { Router } from 'https://cdn.jsdelivr.net/npm/@vaadin/router';
+
+        class HeaderComponent extends LitElement {
+            static styles = css`/* Your CSS here */`;
+            render() {
+                return html`
+                    <header>
+                        <nav>
+                            <button @click="${() => this.navigate('/')}">Home</button>
+                            <button @click="${() => this.navigate('/about')}">About Us</button>
+                        </nav>
+                    </header>
+                `;
+            }
+            navigate(path) {
+                Router.go(path);
+            }
+        }
+        customElements.define('header-component', HeaderComponent);
+
+        class FooterComponent extends LitElement {
+            render() {
+                return html`<div>Just view source this page and you will see all of the code there, easy to follow and learn</div>`;
+            }
+        }
+        customElements.define('footer-component', FooterComponent);
+
+        class AppElement extends LitElement {
+            createRenderRoot() {
+                return this; // Render directly within the element
+            }
+
+            firstUpdated() {
+                // Ensure the outlet div is selected correctly within the light DOM of this component
+                const outlet = this.querySelector('#outlet');
+                const router = new Router(outlet);
+                router.setRoutes([
+                    {
+                        path: '/',
+                        component: 'home-component',
+                        action: async () => {
+                            await import('./HomeComponent.js'); // Ensures AboutComponent is imported
+                            return 'home-component'; // Return the tag name for rendering
+                        },
+                    },
+                    {
+                        path: '/about',
+                        component: 'about-component',
+                        action: async () => {
+                            await import('./AboutComponent.js'); // Ensures AboutComponent is imported
+                            return 'about-component'; // Return the tag name for rendering
+                        },
+                    },
+                    { path: '(.*)', redirect: '/' },
+                ]);
+            }
+
+
+            render() {
+                return html`
+                    <header-component></header-component>
+                    <div id="outlet"></div> <!-- Router will render content here -->
+                    <footer-component></footer-component>
+                `;
+            }
+        }
+        customElements.define('app-element', AppElement);
+    </script>
 </head>
-
 <body>
-<div id="root"></div>
-
-<script type="text/babel" data-presets="env,react">
-    const { createBrowserRouter, RouterProvider, Route, Link } = window.ReactRouterDOM;
-    const { useRoutes, useNavigate } = window.ReactRouter;
-
-    // Header component
-
-    function Header() {
-        const navigate = useNavigate();
-
-        return (
-            <header>
-                <nav>
-                    <button onClick={() => navigate('/')}>Home (path is /)</button>&nbsp;
-                    <button onClick={() => navigate('/about')}>About Us (path is /about)</button>
-                </nav>
-            </header>
-        );
-    }
-
-    // Footer component
-
-    function Footer() {
-        return (
-            <div>Just view source this page and you will see all of the code there, easy to follow and learn</div>
-        )
-    }
-
-    // Home component
-
-    function Home() {
-        return (
-            <div>
-                <Header />
-                <h1>Welcome to the Home Page!</h1>
-                <p>This is the home page content.</p>
-                <Link to="about">About Us</Link><br />
-                <img src="images/pexels-david-gari-20421927.jpg" alt="" height={300} />
-                <Footer />
-            </div>
-        );
-    }
-
-    // About component
-
-    function About() {
-        return (
-            <div>
-                <Header />
-                <h1>About Us</h1>
-                <p>This is the about page content.</p>
-                {/* <Link to="/">Home</Link> */}
-                <Footer />
-            </div>
-        );
-    }
-
-    const router = createBrowserRouter([
-            { path: '/', element: <Home /> },
-            { path: '/about', element: <About /> },
-        ]
-    );
-
-    // Render the router
-    ReactDOM.render(<RouterProvider router={router} />, document.getElementById('root'));
-</script>
+<app-element></app-element>
 </body>
-
 </html>
